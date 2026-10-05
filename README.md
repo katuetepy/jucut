@@ -9,11 +9,29 @@
 ## ✨ Funcionalidades
 
 - **Upload de vídeos** até 2GB (MP4, MOV, AVI, MKV)
+- **⚡ Exportação Ultra-Rápida (3 a 15 segundos para 1GB)**:
+  - **Opção 1 (Servidor Local Nativo)**: execute `iniciar.bat` no seu computador para corte acelerado via FFmpeg Nativo (GPU/CPU).
+  - **Opção 2 (Script .BAT de 2 Cliques)**: baixe o arquivo `.bat` gerado pelo editor, coloque na pasta do vídeo e execute (corta em ~3s via *stream copy* sem re-encode e sem perda de qualidade).
+  - **Opção 3 (Navegador WASM)**: fallback 100% no browser sem instalar nada para vídeos curtos.
+- **100% Responsivo para Mobile & Tablets** — barra de navegação inferior estilo app, gaveta de ajustes e controles táteis
+- **Gestos Touch** — arraste com o dedo na timeline (scrubbing), toque no player para Play/Pause e pinça com 2 dedos para zoom (pinch-to-zoom)
 - **Detecção inteligente de silêncio** usando análise de forma de onda (RMS)
 - **Timeline interativa** com visualização de waveform e regiões de silêncio
 - **Ajuste de parâmetros** — threshold, duração mínima, margem e velocidade de fala
-- **Exportação com FFmpeg.wasm** — processamento 100% no navegador, sem servidor
 - **Design moderno escuro** inspirado em editores profissionais (DaVinci Resolve, Premiere Pro)
+
+## ⚡ Como Exportar Vídeos Grandes (500MB - 1GB) em Segundos
+
+### Opção A — Servidor Local Integrado (Recomendado)
+1. Dê dois cliques em [`iniciar.bat`](file:///c:/Users/59598/Downloads/JuCut/iniciar.bat) (ele abre o navegador com o motor local ativo).
+2. O editor mostrará o badge **⚡ Motor Local Ativo**.
+3. Ao clicar em **Exportar Vídeo**, o corte é feito na velocidade máxima do seu processador/placa de vídeo.
+
+### Opção B — Download do Script .BAT (Sem Servidor)
+1. Use o editor normalmente (inclusive no GitHub Pages).
+2. Na janela de exportação, selecione **Baixar Script de Corte (.bat)**.
+3. Coloque o arquivo `.bat` baixado na mesma pasta do seu vídeo original e dê dois cliques.
+4. O vídeo sem silêncios é gerado em cerca de **3 segundos** usando corte *lossless* (sem perda de qualidade).
 
 ## 🛠️ Tecnologias
 

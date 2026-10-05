@@ -39,6 +39,9 @@
   <!-- TOP BAR -->
   <header class="topbar" id="topbar">
     <div class="topbar-left">
+      <button class="mobile-toggle-btn" id="mobile-toggle-panel" aria-label="Abrir Ajustes" title="Ajustes e Mídia">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
       <div class="logo">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
           <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="#00d4ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -77,13 +80,16 @@
       </div>
       <button class="btn-export" id="btn-export" disabled>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        Exportar Vídeo
+        <span class="export-label">Exportar</span>
       </button>
     </div>
   </header>
 
+  <!-- DRAWER BACKDROP (FOR MOBILE) -->
+  <div class="drawer-backdrop" id="drawer-backdrop"></div>
+
   <!-- MAIN LAYOUT -->
-  <main class="main-layout" id="main-layout">
+  <main class="main-layout" id="main-layout" data-mobile-tab="editor">
 
     <!-- LEFT PANEL -->
     <aside class="left-panel" id="left-panel">
@@ -299,6 +305,23 @@
     </div>
   </main>
 
+  <!-- MOBILE BOTTOM NAVIGATION BAR -->
+  <nav class="mobile-nav" id="mobile-nav">
+    <button class="mobile-nav-btn active" data-tab="editor" id="tab-btn-editor">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><polyline points="8 21 12 17 16 21"/></svg>
+      <span>Editor</span>
+    </button>
+    <button class="mobile-nav-btn" data-tab="silence" id="tab-btn-silence">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>
+      <span>Silêncio</span>
+    </button>
+    <button class="mobile-nav-btn" data-tab="stats" id="tab-btn-stats">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+      <span>Cortes</span>
+      <span class="mobile-badge" id="mobile-badge">0</span>
+    </button>
+  </nav>
+
   <!-- EXPORT MODAL -->
   <div class="modal-backdrop" id="export-modal" style="display:none">
     <div class="modal">
@@ -324,20 +347,79 @@
           </div>
         </div>
 
-        <div class="export-options">
+        <!-- ENGINE STATUS BANNER -->
+        <div class="engine-banner" id="engine-banner">
+          <div class="engine-status">
+            <span class="engine-dot" id="engine-dot"></span>
+            <div class="engine-texts">
+              <strong id="engine-title">Motor Local (FFmpeg Nativo)</strong>
+              <span id="engine-desc">Detectando servidor em localhost:8765...</span>
+            </div>
+          </div>
+          <button class="engine-refresh-btn" id="btn-refresh-engine" title="Verificar conexão com o servidor local">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          </button>
+        </div>
+
+        <!-- EXPORT METHOD SELECTOR -->
+        <div class="option-group">
+          <label>Modo de Exportação</label>
+          <div class="method-cards" id="method-cards">
+            <div class="method-card active" data-method="local" id="card-method-local">
+              <div class="method-icon">⚡</div>
+              <div class="method-info">
+                <strong>Servidor Local (Ultra-Rápido)</strong>
+                <span>Processa com FFmpeg nativo em segundos via GPU/CPU</span>
+              </div>
+            </div>
+            <div class="method-card" data-method="script" id="card-method-script">
+              <div class="method-icon">📥</div>
+              <div class="method-info">
+                <strong>Baixar Script de Corte (.bat)</strong>
+                <span>Corte instantâneo de 3s dando 2 cliques na pasta do vídeo</span>
+              </div>
+            </div>
+            <div class="method-card" data-method="wasm" id="card-method-wasm">
+              <div class="method-icon">🌐</div>
+              <div class="method-info">
+                <strong>Navegador (WASM 100% Web)</strong>
+                <span>Sem servidor nem instalação (mais lento para vídeos grandes)</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- SCRIPT DOWNLOAD SECTION (SHOWS WHEN SCRIPT METHOD SELECTED) -->
+        <div class="script-options" id="script-options" style="display:none">
+          <div class="script-hint">
+            O script já vem com todos os cortes e timestamps calculados para este vídeo. Ele usa <code>-c copy</code> (sem re-encoding), cortando arquivos de 1GB em menos de 5 segundos sem perder qualidade.
+          </div>
+          <div class="script-btn-grid">
+            <button class="btn-script-dl" id="btn-dl-bat">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              <span>Baixar Script <strong>.BAT</strong> (Windows)</span>
+            </button>
+            <button class="btn-script-dl secondary" id="btn-dl-py">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              <span>Baixar Script <strong>.PY</strong> (Python)</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- VIDEO SETTINGS (HIDDEN IN SCRIPT MODE) -->
+        <div class="export-options" id="export-options-wrap">
+          <div class="option-group">
+            <label>Velocidade e Qualidade</label>
+            <div class="option-pills">
+              <button class="pill active" data-mode="fast" id="pill-fast">⚡ Modo Rápido (Sem Re-encode)</button>
+              <button class="pill" data-mode="reencode" id="pill-reencode">🎬 Re-encode Completo</button>
+            </div>
+          </div>
           <div class="option-group">
             <label>Formato de Saída</label>
             <div class="option-pills">
               <button class="pill active" data-format="mp4">MP4</button>
               <button class="pill" data-format="webm">WebM</button>
-            </div>
-          </div>
-          <div class="option-group">
-            <label>Qualidade</label>
-            <div class="option-pills">
-              <button class="pill" data-quality="high">Alta</button>
-              <button class="pill active" data-quality="medium">Média</button>
-              <button class="pill" data-quality="low">Baixa</button>
             </div>
           </div>
         </div>
@@ -350,7 +432,7 @@
           <div class="export-progress-bar-bg">
             <div class="export-progress-bar-fill" id="export-progress-fill"></div>
           </div>
-          <p class="export-note">O processamento ocorre no seu navegador. Para vídeos grandes isso pode levar alguns minutos.</p>
+          <p class="export-note" id="export-note">Processando localmente de alta performance.</p>
         </div>
       </div>
       <div class="modal-footer">

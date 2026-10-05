@@ -26,6 +26,9 @@ const state = {
   isPlaying: false,
   exportFormat: 'mp4',
   exportQuality: 'medium',
+  exportMethod: 'local', // 'local' | 'script' | 'wasm'
+  exportMode: 'fast',    // 'fast' | 'reencode'
+  localEngine: { online: false, path: null },
   animFrameId: null,
 };
 
@@ -48,6 +51,30 @@ const els = {
   btnRewind:       $('btn-rewind'),
   btnForward:      $('btn-forward'),
   btnExport:       $('btn-export'),
+
+  // Mobile elements
+  mobileTogglePanel: $('mobile-toggle-panel'),
+  drawerBackdrop:    $('drawer-backdrop'),
+  mainLayout:        $('main-layout'),
+  mobileNav:         $('mobile-nav'),
+  mobileBadge:       $('mobile-badge'),
+
+  // Engine & Local Export elements
+  engineBanner:     $('engine-banner'),
+  engineDot:        $('engine-dot'),
+  engineTitle:      $('engine-title'),
+  engineDesc:       $('engine-desc'),
+  btnRefreshEngine: $('btn-refresh-engine'),
+  cardMethodLocal:  $('card-method-local'),
+  cardMethodScript: $('card-method-script'),
+  cardMethodWasm:   $('card-method-wasm'),
+  scriptOptions:    $('script-options'),
+  btnDlBat:         $('btn-dl-bat'),
+  btnDlPy:          $('btn-dl-py'),
+  exportOptionsWrap:$('export-options-wrap'),
+  pillFast:         $('pill-fast'),
+  pillReencode:     $('pill-reencode'),
+  exportNote:       $('export-note'),
 
   statusDot:       $('status-dot'),
   statusText:      $('status-text'),
@@ -394,6 +421,12 @@ function detectSilences() {
 
   setStatus(`${state.silenceRegions.length} silêncios detectados`, 'success');
   showToast(`Detectados ${state.silenceRegions.length} silêncios — ${formatDuration(totalSilenceDuration())} a remover.`, 'success');
+
+  // If on mobile/tablet, switch to editor tab so cuts are immediately seen on timeline
+  if (window.innerWidth <= 900) {
+    const editorTabBtn = document.getElementById('tab-btn-editor');
+    if (editorTabBtn) editorTabBtn.click();
+  }
 }
 
 function dbToLinear(db) {
@@ -445,6 +478,11 @@ function updateStats() {
   els.statRemoved.textContent = formatDuration(removed);
   els.statFinal.textContent   = formatDuration(final);
   els.reductionPct.textContent = pct + '%';
+
+  if (els.mobileBadge) {
+    els.mobileBadge.textContent = String(state.silenceRegions.length);
+    els.mobileBadge.style.display = state.silenceRegions.length > 0 ? 'inline-block' : 'none';
+  }
 
   setTimeout(() => { els.reductionFill.style.width = pct + '%'; }, 100);
 }
@@ -713,6 +751,9 @@ function setupTransport() {
   els.btnRewind.addEventListener('click',    () => seek(Math.max(0, state.playheadTime - 5)));
   els.btnForward.addEventListener('click',   () => seek(Math.min(state.videoDuration, state.playheadTime + 5)));
 
+  // Tap video to play/pause
+  els.videoPlayer.addEventListener('click', togglePlay);
+
   // Click on timeline to seek
   els.timelineTracks.addEventListener('click', e => {
     const rect = els.timelineTracks.getBoundingClientRect();
@@ -720,6 +761,52 @@ function setupTransport() {
     const t = x / getPx();
     seek(t);
   });
+
+  // Mobile Touch Scrubbing & Pinch-to-Zoom on Timeline
+  let pinchStartDist = 0;
+  let pinchStartZoom = 1;
+
+  els.timelineTracks.addEventListener('touchstart', e => {
+    if (e.touches.length === 1) {
+      const rect = els.timelineTracks.getBoundingClientRect();
+      const x = e.touches[0].clientX - rect.left + els.timelineTracks.scrollLeft;
+      const t = x / getPx();
+      seek(t);
+    } else if (e.touches.length === 2) {
+      pinchStartDist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      pinchStartZoom = state.zoom;
+    }
+  }, { passive: true });
+
+  els.timelineTracks.addEventListener('touchmove', e => {
+    if (e.touches.length === 1) {
+      e.preventDefault(); // Prevent page scroll while scrubbing
+      const rect = els.timelineTracks.getBoundingClientRect();
+      const x = e.touches[0].clientX - rect.left + els.timelineTracks.scrollLeft;
+      const t = Math.max(0, Math.min(state.videoDuration, x / getPx()));
+      seek(t);
+    } else if (e.touches.length === 2 && pinchStartDist > 0) {
+      e.preventDefault();
+      const curDist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      const ratio = curDist / pinchStartDist;
+      const newZoom = Math.max(0.5, Math.min(20, pinchStartZoom * ratio));
+      state.zoom = newZoom;
+      els.zoomSlider.value = newZoom;
+      els.zoomLabel.textContent = newZoom.toFixed(1) + '×';
+      drawTimeline();
+      updatePlayhead();
+    }
+  }, { passive: false });
+
+  els.timelineTracks.addEventListener('touchend', () => {
+    pinchStartDist = 0;
+  }, { passive: true });
 
   // Keyboard shortcuts
   document.addEventListener('keydown', e => {
@@ -796,7 +883,97 @@ function undoRemoveSilences() {
   showToast('Remoção desfeita.', 'info');
 }
 
-// ─── 10. Export Modal ──────────────────────────────────────────────────────
+// ─── 10. Local Engine & Export Modal ──────────────────────────────────────
+async function checkLocalEngine() {
+  if (els.engineDot) {
+    els.engineDot.className = 'engine-dot';
+    els.engineTitle.textContent = 'Verificando motor local...';
+    els.engineDesc.textContent = 'Conectando ao servidor em localhost:8765...';
+  }
+
+  let online = false;
+  let engineData = null;
+
+  // Tentar na mesma origem
+  try {
+    const res = await fetch('/api/status', { signal: AbortSignal.timeout(1200) });
+    if (res.ok) {
+      engineData = await res.json();
+      online = engineData.online;
+    }
+  } catch (e) {}
+
+  // Tentar explicitamente em localhost:8765
+  if (!online) {
+    try {
+      const res = await fetch('http://localhost:8765/api/status', { signal: AbortSignal.timeout(1200) });
+      if (res.ok) {
+        engineData = await res.json();
+        online = engineData.online;
+      }
+    } catch (e) {}
+  }
+
+  state.localEngine = {
+    online: online,
+    path: engineData ? engineData.ffmpeg_path : null
+  };
+
+  updateEngineUI(online, engineData);
+  return online;
+}
+
+function updateEngineUI(online, data) {
+  if (!els.engineDot) return;
+
+  if (online) {
+    els.engineDot.className = 'engine-dot online';
+    els.engineTitle.textContent = '⚡ Motor Local Ativo (FFmpeg Nativo)';
+    els.engineDesc.textContent = 'Pronto para exportação ultra-rápida (corte em segundos via GPU/CPU)';
+    selectExportMethod('local');
+  } else {
+    els.engineDot.className = 'engine-dot offline';
+    els.engineTitle.textContent = 'Servidor local não conectado';
+    els.engineDesc.textContent = 'Execute iniciar.bat ou baixe o Script .BAT para corte instantâneo';
+    selectExportMethod('script');
+  }
+}
+
+function selectExportMethod(method) {
+  state.exportMethod = method;
+
+  // Toggle method cards
+  document.querySelectorAll('.method-card').forEach(c => {
+    c.classList.toggle('active', c.dataset.method === method);
+  });
+
+  if (method === 'script') {
+    if (els.scriptOptions) els.scriptOptions.style.display = 'flex';
+    if (els.exportOptionsWrap) els.exportOptionsWrap.style.display = 'none';
+    if (els.btnStartExport) {
+      els.btnStartExport.innerHTML = `
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Baixar Script .BAT (3s)
+      `;
+    }
+    if (els.exportNote) els.exportNote.textContent = 'O script .BAT executa o corte no seu PC em ~3 segundos via stream copy.';
+  } else {
+    if (els.scriptOptions) els.scriptOptions.style.display = 'none';
+    if (els.exportOptionsWrap) els.exportOptionsWrap.style.display = 'flex';
+    if (els.btnStartExport) {
+      const isLocal = method === 'local';
+      els.btnStartExport.innerHTML = isLocal
+        ? `⚡ Iniciar Exportação Nativa (Rápida)`
+        : `🌐 Iniciar Exportação no Navegador`;
+    }
+    if (els.exportNote) {
+      els.exportNote.textContent = method === 'local'
+        ? 'Processando com FFmpeg Nativo no seu computador (alta velocidade).'
+        : 'Processando no navegador via WebAssembly (pode demorar para vídeos grandes).';
+    }
+  }
+}
+
 function openExportModal() {
   const total = state.videoDuration;
   const removed = totalSilenceDuration();
@@ -813,153 +990,228 @@ function openExportModal() {
   els.btnCancelExport.textContent      = 'Cancelar';
 
   els.exportModal.style.display = 'flex';
+
+  // Verificar se o servidor local está online
+  checkLocalEngine();
 }
 
 function closeExportModal() {
   els.exportModal.style.display = 'none';
 }
 
-// ─── 11. FFmpeg Export ────────────────────────────────────────────────────
-async function startExport() {
-  if (!state.ffmpegReady || !state.videoFile || !state.activeSegments.length) {
+// ─── 11. Script Generators (Download .BAT / .PY) ───────────────────────────
+function downloadBatchScript() {
+  if (!state.videoFile || !state.activeSegments.length) {
+    showToast('Nenhum corte para exportar.', 'warning');
+    return;
+  }
+  const filename = state.videoFile.name;
+  const baseName = filename.replace(/\.[^.]+$/, '');
+  const ext = filename.split('.').pop() || 'mp4';
+  const outName = `${baseName}_cortado.${ext}`;
+
+  const lines = [
+    '@echo off',
+    'chcp 65001 > nul',
+    'title JuCut — Corte Ultra-Rapido de Silencios',
+    'color 0b',
+    'echo ========================================================',
+    'echo       JuCut — Corte Ultra-Rapido com FFmpeg Nativo',
+    'echo ========================================================',
+    'echo.',
+    `echo  [*] Video de Entrada: "${filename}"`,
+    `echo  [*] Video de Saida:   "${outName}"`,
+    `echo  [*] Total de Cortes:  ${state.activeSegments.length}`,
+    'echo.',
+    'REM 1. Localizar executavel do FFmpeg',
+    'set FFMPEG=ffmpeg',
+    'if exist "ffmpeg.exe" (set FFMPEG="ffmpeg.exe")',
+    '%FFMPEG% -version >nul 2>&1',
+    'if %errorlevel% neq 0 (',
+    '    echo [AVISO] FFmpeg nao encontrado no sistema.',
+    '    echo Baixando ffmpeg.exe portatil automaticamente...',
+    '    curl -L -o ffmpeg.exe "https://github.com/eugeneware/ffmpeg-static/releases/latest/download/ffmpeg-win32-x64" >nul 2>&1',
+    '    set FFMPEG="ffmpeg.exe"',
+    ')',
+    'echo  [*] Cortando trechos com stream copy (sem perda de qualidade)...',
+    'if not exist temp_jucut mkdir temp_jucut',
+    'if exist temp_jucut\\concat.txt del temp_jucut\\concat.txt',
+  ];
+
+  state.activeSegments.forEach((seg, i) => {
+    const chunkName = `temp_jucut\\part_${String(i).padStart(4, '0')}.${ext}`;
+    const dur = (seg.end - seg.start).toFixed(4);
+    const start = seg.start.toFixed(4);
+    lines.push(
+      `%FFMPEG% -y -ss ${start} -i "${filename}" -t ${dur} -c copy -avoid_negative_ts make_zero "${chunkName}" -loglevel error`
+    );
+    lines.push(
+      `echo file 'part_${String(i).padStart(4, '0')}.${ext}' >> temp_jucut\\concat.txt`
+    );
+  });
+
+  lines.push(
+    'echo  [*] Concatenando video final...',
+    `%FFMPEG% -y -f concat -safe 0 -i temp_jucut\\concat.txt -c copy "${outName}" -loglevel error`,
+    'echo  [*] Limpando arquivos temporarios...',
+    'rmdir /s /q temp_jucut',
+    'echo.',
+    'echo ========================================================',
+    'echo  [OK] Video cortado com sucesso em poucos segundos!',
+    `echo  Arquivo salvo: "${outName}"`,
+    'echo ========================================================',
+    'pause'
+  );
+
+  const scriptContent = lines.join('\r\n');
+  const blob = new Blob([scriptContent], { type: 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `cortar_${baseName}.bat`;
+  a.click();
+  showToast('Script .BAT baixado! Coloque na mesma pasta do vídeo e execute com 2 cliques.', 'success');
+}
+
+function downloadPythonScript() {
+  if (!state.videoFile || !state.activeSegments.length) {
+    showToast('Nenhum corte para exportar.', 'warning');
+    return;
+  }
+  const filename = state.videoFile.name;
+  const baseName = filename.replace(/\.[^.]+$/, '');
+  const ext = filename.split('.').pop() || 'mp4';
+  const outName = `${baseName}_cortado.${ext}`;
+  const segsJson = JSON.stringify(state.activeSegments, null, 2);
+
+  const pyContent = `#!/usr/bin/env python3
+# JuCut — Corte Ultra-Rápido de Silêncios via FFmpeg Nativo
+import os, sys, subprocess, shutil
+
+VIDEO_IN = r"${filename}"
+VIDEO_OUT = r"${outName}"
+SEGMENTS = ${segsJson}
+
+def find_ffmpeg():
+    if os.path.exists("ffmpeg.exe"):
+        return os.path.abspath("ffmpeg.exe")
+    if shutil.which("ffmpeg"):
+        return "ffmpeg"
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except:
+        pass
+    print("[ERRO] FFmpeg não encontrado. Coloque ffmpeg.exe nesta mesma pasta.")
+    sys.exit(1)
+
+def main():
+    ff = find_ffmpeg()
+    print("=" * 55)
+    print("  JuCut — Corte de Silêncios")
+    print(f"  Vídeo : {VIDEO_IN}")
+    print(f"  Total : {len(SEGMENTS)} segmentos")
+    print("=" * 55)
+    temp_dir = "temp_jucut"
+    os.makedirs(temp_dir, exist_ok=True)
+    concat_list = os.path.join(temp_dir, "concat.txt")
+
+    with open(concat_list, "w", encoding="utf-8") as cl:
+        for i, s in enumerate(SEGMENTS):
+            chunk = os.path.join(temp_dir, f"part_{i:04d}.${ext}")
+            dur = s["end"] - s["start"]
+            cmd = [ff, "-y", "-ss", str(s["start"]), "-i", VIDEO_IN, "-t", str(dur), "-c", "copy", "-avoid_negative_ts", "make_zero", chunk, "-loglevel", "error"]
+            subprocess.run(cmd, check=True)
+            cl.write(f"file '{os.path.basename(chunk)}'\\n")
+            print(f"\\rCortando segmentos: {i+1}/{len(SEGMENTS)}...", end="", flush=True)
+
+    print("\\nConcatenando vídeo final...")
+    subprocess.run([ff, "-y", "-f", "concat", "-safe", "0", "-i", concat_list, "-c", "copy", VIDEO_OUT, "-loglevel", "error"], check=True)
+    shutil.rmtree(temp_dir)
+    print(f"[OK] Vídeo pronto: {VIDEO_OUT}")
+
+if __name__ == "__main__":
+    main()
+`;
+
+  const blob = new Blob([pyContent], { type: 'text/x-python' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `cortar_${baseName}.py`;
+  a.click();
+  showToast('Script Python baixado!', 'success');
+}
+
+// ─── 12. Local Native Export (Ultra-Fast) ──────────────────────────────────
+async function exportWithLocalServer() {
+  if (!state.videoFile || !state.activeSegments.length) {
     showToast('Nada a exportar.', 'warning');
     return;
   }
 
   els.btnStartExport.disabled = true;
   els.exportProgressWrap.style.display = 'flex';
-  els.exportProgressFill.style.width = '0%';
-  els.exportProgressText.textContent = 'Carregando arquivo no FFmpeg...';
-  setStatus('Exportando...', 'working');
+  els.exportProgressFill.style.width = '10%';
+  els.exportProgressPct.textContent = '10%';
+  els.exportProgressText.textContent = 'Enviando vídeo para o FFmpeg nativo local...';
+  setStatus('Processando localmente...', 'working');
 
   try {
-    const ff = state.ffmpeg;
-    const ext = state.videoFile.name.split('.').pop() || 'mp4';
-    const inputName  = `input.${ext}`;
-    const outputName = `output.${state.exportFormat}`;
+    const formData = new FormData();
+    formData.append('video', state.videoFile);
+    formData.append('metadata', JSON.stringify({
+      filename: state.videoFile.name,
+      segments: state.activeSegments,
+      speed: parseFloat(els.sliderSpeed.value),
+      format: state.exportFormat,
+      mode: state.exportMode,
+    }));
 
-    // Write input
-    els.exportProgressText.textContent = 'Carregando vídeo...';
-    updateExportProgress(5);
-    ff.FS('writeFile', inputName, await fetchFile(state.videoFile));
+    // Poll progress
+    const progressTimer = setInterval(async () => {
+      try {
+        const pr = await fetch('/api/progress');
+        if (pr.ok) {
+          const pData = await pr.json();
+          if (pData.progress) {
+            updateExportProgress(pData.progress);
+            if (pData.status) els.exportProgressText.textContent = pData.status;
+          }
+        }
+      } catch (e) {}
+    }, 400);
 
-    // Build filter_complex for concat
-    const segs = state.activeSegments;
-    const speed = parseFloat(els.sliderSpeed.value);
-    const n = segs.length;
-
-    const qualityMap = {
-      high:   { crf: '18', audioBitrate: '192k' },
-      medium: { crf: '23', audioBitrate: '128k' },
-      low:    { crf: '28', audioBitrate: '96k' },
-    };
-    const q = qualityMap[state.exportQuality];
-
-    els.exportProgressText.textContent = 'Montando filtros FFmpeg...';
-    updateExportProgress(10);
-
-    // Build trim + concat filter
-    let filterParts = [];
-    for (let i = 0; i < n; i++) {
-      const { start, end } = segs[i];
-      filterParts.push(`[0:v]trim=start=${start.toFixed(4)}:end=${end.toFixed(4)},setpts=PTS-STARTPTS[v${i}];`);
-      filterParts.push(`[0:a]atrim=start=${start.toFixed(4)}:end=${end.toFixed(4)},asetpts=PTS-STARTPTS[a${i}];`);
-    }
-
-    const vInputs = segs.map((_, i) => `[v${i}]`).join('');
-    const aInputs = segs.map((_, i) => `[a${i}]`).join('');
-
-    // Speed filter
-    let vConcat, aConcat;
-    if (Math.abs(speed - 1.0) > 0.01) {
-      filterParts.push(`${vInputs}concat=n=${n}:v=1:a=0[vconcat];`);
-      filterParts.push(`${aInputs}concat=n=${n}:v=0:a=1[aconcat];`);
-      filterParts.push(`[vconcat]setpts=${(1/speed).toFixed(4)}*PTS[vout];`);
-      filterParts.push(`[aconcat]atempo=${Math.min(2.0, speed).toFixed(4)}[aout]`);
-      if (speed > 2.0) {
-        // chain atempo for speed > 2
-        filterParts[filterParts.length - 1] = `[aconcat]atempo=2.0,atempo=${(speed / 2.0).toFixed(4)}[aout]`;
-      }
-      vConcat = '[vout]';
-      aConcat = '[aout]';
-    } else {
-      filterParts.push(`${vInputs}concat=n=${n}:v=1:a=0[vout];`);
-      filterParts.push(`${aInputs}concat=n=${n}:v=0:a=1[aout]`);
-      vConcat = '[vout]';
-      aConcat = '[aout]';
-    }
-
-    const filterComplex = filterParts.join('');
-
-    // Set progress callback
-    ff.setProgress(({ ratio }) => {
-      const pct = Math.round(10 + ratio * 85);
-      updateExportProgress(pct);
-      els.exportProgressText.textContent = `FFmpeg: ${pct}%`;
+    const res = await fetch('/api/export', {
+      method: 'POST',
+      body: formData,
     });
+    clearInterval(progressTimer);
 
-    const args = [
-      '-i', inputName,
-      '-filter_complex', filterComplex,
-      '-map', vConcat,
-      '-map', aConcat,
-    ];
-
-    if (state.exportFormat === 'mp4') {
-      args.push('-c:v', 'libx264', '-crf', q.crf, '-preset', 'fast',
-                '-c:a', 'aac', '-b:a', q.audioBitrate,
-                '-movflags', '+faststart');
-    } else {
-      args.push('-c:v', 'libvpx-vp9', '-crf', q.crf, '-b:v', '0',
-                '-c:a', 'libopus', '-b:a', q.audioBitrate);
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Erro no servidor local');
     }
 
-    args.push('-y', outputName);
-
-    els.exportProgressText.textContent = 'Processando com FFmpeg (pode demorar)...';
-    await ff.run(...args);
-
-    updateExportProgress(98);
-    els.exportProgressText.textContent = 'Lendo arquivo de saída...';
-
-    const data = ff.FS('readFile', outputName);
-    const blob = new Blob([data.buffer], {
-      type: state.exportFormat === 'mp4' ? 'video/mp4' : 'video/webm'
-    });
-
-    // Cleanup
-    ff.FS('unlink', inputName);
-    ff.FS('unlink', outputName);
-
+    const data = await res.json();
     updateExportProgress(100);
-    els.exportProgressText.textContent = '✅ Concluído!';
+    els.exportProgressText.textContent = '✅ Concluído em poucos segundos!';
 
-    // Trigger download
-    const url = URL.createObjectURL(blob);
+    // Download do vídeo renderizado
     const a = document.createElement('a');
-    const baseName = state.videoFile.name.replace(/\.[^.]+$/, '');
-    a.href = url;
-    a.download = `${baseName}_jucut.${state.exportFormat}`;
+    a.href = data.download_url;
+    a.download = data.filename;
     a.click();
-    URL.revokeObjectURL(url);
 
     setStatus('Exportação concluída!', 'success');
-    showToast('Vídeo exportado com sucesso! 🎉', 'success');
+    showToast(`Vídeo exportado com sucesso via FFmpeg Nativo! (${data.size_mb} MB) 🎉`, 'success');
     els.btnCancelExport.textContent = 'Fechar';
     els.btnStartExport.disabled = false;
-
   } catch (err) {
-    console.error('Export error:', err);
+    console.error('Local export error:', err);
     els.exportProgressText.textContent = '❌ Erro: ' + err.message;
-    setStatus('Erro na exportação', 'error');
-    showToast('Erro na exportação: ' + err.message, 'error');
+    setStatus('Erro na exportação local', 'error');
+    showToast('Erro no motor local. Tente baixar o Script .BAT de corte!', 'warning');
     els.btnStartExport.disabled = false;
   }
-}
-
-function updateExportProgress(pct) {
-  els.exportProgressFill.style.width = pct + '%';
-  els.exportProgressPct.textContent  = pct + '%';
 }
 
 // ─── 12. Slider Live Updates ───────────────────────────────────────────────
@@ -978,8 +1230,48 @@ function setupSliders() {
   });
 }
 
-// ─── 13. Export Options (pills) ────────────────────────────────────────────
+// ─── 13. Export Options & Local Engine Controls ───────────────────────────
 function setupExportOptions() {
+  // Method selection cards
+  document.querySelectorAll('.method-card').forEach(card => {
+    card.addEventListener('click', () => {
+      selectExportMethod(card.dataset.method);
+    });
+  });
+
+  // Refresh engine status button
+  if (els.btnRefreshEngine) {
+    els.btnRefreshEngine.addEventListener('click', () => {
+      checkLocalEngine().then(online => {
+        if (online) showToast('Motor local conectado com sucesso!', 'success');
+        else showToast('Servidor local não encontrado em localhost:8765. Inicie com iniciar.bat', 'warning');
+      });
+    });
+  }
+
+  // Script download buttons
+  if (els.btnDlBat) {
+    els.btnDlBat.addEventListener('click', downloadBatchScript);
+  }
+  if (els.btnDlPy) {
+    els.btnDlPy.addEventListener('click', downloadPythonScript);
+  }
+
+  // Fast vs Reencode pills
+  if (els.pillFast && els.pillReencode) {
+    els.pillFast.addEventListener('click', () => {
+      els.pillFast.classList.add('active');
+      els.pillReencode.classList.remove('active');
+      state.exportMode = 'fast';
+    });
+    els.pillReencode.addEventListener('click', () => {
+      els.pillReencode.classList.add('active');
+      els.pillFast.classList.remove('active');
+      state.exportMode = 'reencode';
+    });
+  }
+
+  // Format pills
   document.querySelectorAll('.pill[data-format]').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.pill[data-format]').forEach(b => b.classList.remove('active'));
@@ -987,21 +1279,69 @@ function setupExportOptions() {
       state.exportFormat = btn.dataset.format;
     });
   });
-  document.querySelectorAll('.pill[data-quality]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.pill[data-quality]').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      state.exportQuality = btn.dataset.quality;
-    });
-  });
 }
 
-// ─── 14. Window Resize ─────────────────────────────────────────────────────
+// ─── 14. Mobile Navigation & Drawer ─────────────────────────────────────────
+function setupMobileNav() {
+  const navBtns = document.querySelectorAll('.mobile-nav-btn');
+  navBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      navBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const tab = btn.dataset.tab;
+      if (els.mainLayout) els.mainLayout.dataset.mobileTab = tab;
+
+      // Close drawer if open
+      document.body.classList.remove('drawer-open');
+      if (els.drawerBackdrop) els.drawerBackdrop.classList.remove('active');
+
+      if (tab === 'editor') {
+        setTimeout(() => {
+          if (state.videoDuration) {
+            drawTimeline();
+            updatePlayhead();
+          }
+        }, 80);
+      } else if (tab === 'silence') {
+        const silenceSec = document.getElementById('section-silence');
+        if (silenceSec) silenceSec.scrollIntoView({ behavior: 'smooth' });
+      } else if (tab === 'stats') {
+        const statsSec = document.getElementById('section-stats');
+        if (statsSec) statsSec.scrollIntoView({ behavior: 'smooth' });
+      }
+    });
+  });
+
+  // Drawer toggle button in topbar
+  if (els.mobileTogglePanel) {
+    els.mobileTogglePanel.addEventListener('click', () => {
+      const isOpen = document.body.classList.toggle('drawer-open');
+      if (els.drawerBackdrop) {
+        els.drawerBackdrop.classList.toggle('active', isOpen);
+      }
+    });
+  }
+
+  // Drawer backdrop click to close
+  if (els.drawerBackdrop) {
+    els.drawerBackdrop.addEventListener('click', () => {
+      document.body.classList.remove('drawer-open');
+      els.drawerBackdrop.classList.remove('active');
+    });
+  }
+}
+
+// ─── 15. Window Resize ─────────────────────────────────────────────────────
 function setupResize() {
   let resizeTimer;
   window.addEventListener('resize', () => {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
+      // If resized back to desktop, remove drawer classes
+      if (window.innerWidth > 900) {
+        document.body.classList.remove('drawer-open');
+        if (els.drawerBackdrop) els.drawerBackdrop.classList.remove('active');
+      }
       if (state.videoDuration) drawTimeline();
     }, 150);
   });
@@ -1014,6 +1354,7 @@ async function init() {
   setupZoom();
   setupSliders();
   setupExportOptions();
+  setupMobileNav();
   setupResize();
 
   // Wire up buttons
