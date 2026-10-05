@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JuCut — Editor de Silêncio Online</title>
+  <meta name="description" content="Editor de vídeo online inteligente que detecta e remove silêncios automaticamente. Faça upload do seu vídeo e exporte sem silêncios." />
+  <!-- COI Service Worker: enables SharedArrayBuffer on GitHub Pages for FFmpeg.wasm -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./coi-serviceworker.js').then(reg => {
+        if (reg.installing || reg.waiting) {
+          // Reload once the SW activates to apply COOP/COEP headers
+          navigator.serviceWorker.addEventListener('controllerchange', () => location.reload());
+        }
+      }).catch(console.error);
+    }
+  </script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- SPLASH / LOADING OVERLAY -->
+  <div id="ffmpeg-loading" class="ffmpeg-loading-overlay">
+    <div class="ffmpeg-loading-content">
+      <div class="logo-splash">
+        <span class="logo-j">Ju</span><span class="logo-cut">Cut</span>
+      </div>
+      <div class="loading-bar-container">
+        <div class="loading-bar" id="loading-bar"></div>
+      </div>
+      <p class="loading-text" id="loading-text">Inicializando FFmpeg...</p>
+    </div>
+  </div>
+
+  <!-- TOP BAR -->
+  <header class="topbar" id="topbar">
+    <div class="topbar-left">
+      <div class="logo">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="#00d4ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="logo-text"><span class="logo-j">Ju</span><span class="logo-cut">Cut</span></span>
+      </div>
+      <div class="project-name" id="project-name-display">Sem Projeto</div>
+    </div>
+
+    <div class="topbar-center">
+      <div class="transport-controls">
+        <button class="transport-btn" id="btn-skip-start" title="Ir ao início">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
+        </button>
+        <button class="transport-btn" id="btn-rewind" title="Retroceder">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m11 18 2.83-2.83L11 12.34V6l-6 6 6 6zm2-12v12l6-6z"/></svg>
+        </button>
+        <button class="transport-btn transport-play" id="btn-play-pause" title="Play/Pause">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" id="play-icon"><path d="M8 5v14l11-7z"/></svg>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" id="pause-icon" style="display:none"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+        </button>
+        <button class="transport-btn" id="btn-forward" title="Avançar">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M13 6v6.17l-2.83 2.83L13 18l6-6-6-6zm-2 0L5 12l6 6v-5.66l2.83-2.83z"/></svg>
+        </button>
+        <button class="transport-btn" id="btn-skip-end" title="Ir ao final">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zm2-8.14L11.03 12 8 14.14V9.86zM16 6h2v12h-2z"/></svg>
+        </button>
+      </div>
+      <div class="timecode" id="timecode-display">00:00:00.000</div>
+    </div>
+
+    <div class="topbar-right">
+      <div class="status-indicator" id="status-indicator">
+        <span class="status-dot idle" id="status-dot"></span>
+        <span id="status-text">Pronto</span>
+      </div>
+      <button class="btn-export" id="btn-export" disabled>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Exportar Vídeo
+      </button>
+    </div>
+  </header>
+
+  <!-- MAIN LAYOUT -->
+  <main class="main-layout" id="main-layout">
+
+    <!-- LEFT PANEL -->
+    <aside class="left-panel" id="left-panel">
+      <!-- Upload Section -->
+      <section class="panel-section" id="section-upload">
+        <div class="section-header">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          MÍDIA
+        </div>
+        <div class="drop-zone" id="drop-zone">
+          <div class="drop-zone-inner">
+            <div class="drop-icon">
+              <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+                <polyline points="8 21 12 17 16 21"/>
+                <line x1="12" y1="17" x2="12" y2="21"/>
+              </svg>
+            </div>
+            <p class="drop-text">Arraste seu vídeo aqui</p>
+            <p class="drop-subtext">ou clique para selecionar</p>
+            <p class="drop-limit">MP4, MOV, AVI, MKV · até 2GB</p>
+            <input type="file" id="file-input" accept="video/*" hidden />
+          </div>
+        </div>
+        <div class="media-info" id="media-info" style="display:none">
+          <div class="media-thumb-wrap">
+            <canvas id="thumb-canvas" width="120" height="68"></canvas>
+            <div class="media-badge">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+            </div>
+          </div>
+          <div class="media-details">
+            <div class="media-filename" id="media-filename">video.mp4</div>
+            <div class="media-meta" id="media-meta">–</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Silence Detection Settings -->
+      <section class="panel-section" id="section-silence">
+        <div class="section-header">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>
+          DETECÇÃO DE SILÊNCIO
+        </div>
+
+        <div class="control-group">
+          <label class="control-label">
+            Threshold de Silêncio
+            <span class="control-value" id="val-threshold">-40 dB</span>
+          </label>
+          <input type="range" class="slider" id="slider-threshold" min="-70" max="-20" value="-40" step="1" />
+          <div class="slider-hints"><span>Quieto (-70dB)</span><span>Alto (-20dB)</span></div>
+        </div>
+
+        <div class="control-group">
+          <label class="control-label">
+            Duração Mínima de Silêncio
+            <span class="control-value" id="val-min-duration">0.5s</span>
+          </label>
+          <input type="range" class="slider" id="slider-min-duration" min="0.1" max="3.0" value="0.5" step="0.05" />
+          <div class="slider-hints"><span>0.1s</span><span>3.0s</span></div>
+        </div>
+
+        <div class="control-group">
+          <label class="control-label">
+            Margem de Preenchimento
+            <span class="control-value" id="val-padding">0.1s</span>
+          </label>
+          <input type="range" class="slider" id="slider-padding" min="0" max="0.5" value="0.1" step="0.01" />
+          <div class="slider-hints"><span>0s</span><span>0.5s</span></div>
+        </div>
+
+        <div class="control-group">
+          <label class="control-label">
+            Velocidade de Fala
+            <span class="control-value" id="val-speed">1.0×</span>
+          </label>
+          <input type="range" class="slider slider-accent" id="slider-speed" min="0.5" max="2.5" value="1.0" step="0.05" />
+          <div class="slider-hints"><span>0.5×</span><span>2.5×</span></div>
+        </div>
+
+        <button class="btn-detect" id="btn-detect" disabled>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          Detectar Silêncios
+        </button>
+      </section>
+
+      <!-- Stats Section -->
+      <section class="panel-section" id="section-stats" style="display:none">
+        <div class="section-header">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+          ESTATÍSTICAS
+        </div>
+        <div class="stats-grid">
+          <div class="stat-item">
+            <div class="stat-value" id="stat-total">–</div>
+            <div class="stat-label">Duração Total</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value accent" id="stat-cuts">–</div>
+            <div class="stat-label">Cortes</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value warning" id="stat-removed">–</div>
+            <div class="stat-label">Silêncio Removido</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value success" id="stat-final">–</div>
+            <div class="stat-label">Duração Final</div>
+          </div>
+        </div>
+        <div class="reduction-bar-wrap">
+          <div class="reduction-label">
+            <span>Redução de tempo</span>
+            <span id="reduction-pct">0%</span>
+          </div>
+          <div class="reduction-bar-bg">
+            <div class="reduction-bar-fill" id="reduction-bar-fill" style="width:0%"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Segment list -->
+      <section class="panel-section" id="section-segments" style="display:none">
+        <div class="section-header">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          SEGMENTOS ATIVOS
+          <span class="badge" id="segments-badge">0</span>
+        </div>
+        <div class="segment-list" id="segment-list"></div>
+      </section>
+    </aside>
+
+    <!-- CENTER: Preview + Timeline -->
+    <div class="center-area">
+
+      <!-- VIDEO PREVIEW -->
+      <div class="preview-area" id="preview-area">
+        <div class="preview-empty" id="preview-empty">
+          <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><rect x="2" y="3" width="20" height="14" rx="2"/><polyline points="8 21 12 17 16 21"/></svg>
+          <p>Nenhum vídeo carregado</p>
+        </div>
+        <video id="video-player" style="display:none" playsinline></video>
+        <div class="preview-overlay" id="preview-overlay" style="display:none">
+          <div class="processing-badge">
+            <div class="spinner"></div>
+            <span id="processing-label">Processando...</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- TIMELINE -->
+      <div class="timeline-area" id="timeline-area">
+        <div class="timeline-header">
+          <div class="timeline-ruler-spacer"></div>
+          <div class="timeline-ruler" id="timeline-ruler">
+            <canvas id="ruler-canvas" height="24"></canvas>
+          </div>
+        </div>
+
+        <div class="timeline-tracks-wrap">
+          <div class="track-labels">
+            <div class="track-label">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/></svg>
+              V1
+            </div>
+            <div class="track-label">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+              A1
+            </div>
+          </div>
+
+          <div class="timeline-tracks" id="timeline-tracks">
+            <!-- Video Track -->
+            <div class="track video-track" id="video-track">
+              <canvas id="video-track-canvas"></canvas>
+            </div>
+            <!-- Audio Track -->
+            <div class="track audio-track" id="audio-track">
+              <canvas id="waveform-canvas"></canvas>
+            </div>
+            <!-- Playhead -->
+            <div class="playhead" id="playhead">
+              <div class="playhead-head"></div>
+              <div class="playhead-line"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="timeline-footer">
+          <div class="zoom-controls">
+            <button class="zoom-btn" id="zoom-out">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </button>
+            <input type="range" id="zoom-slider" min="0.5" max="10" value="1" step="0.1" class="zoom-range" />
+            <button class="zoom-btn" id="zoom-in">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </button>
+            <span class="zoom-label" id="zoom-label">1×</span>
+          </div>
+          <div class="timeline-actions">
+            <button class="tl-btn danger" id="btn-remove-silence" disabled>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+              Remover Silêncios
+            </button>
+            <button class="tl-btn" id="btn-undo-remove" disabled>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.5"/></svg>
+              Desfazer
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- EXPORT MODAL -->
+  <div class="modal-backdrop" id="export-modal" style="display:none">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>Exportar Vídeo</h2>
+        <button class="modal-close" id="modal-close">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="export-summary" id="export-summary">
+          <div class="export-summary-item">
+            <span>Duração final</span>
+            <strong id="export-duration">–</strong>
+          </div>
+          <div class="export-summary-item">
+            <span>Silêncios removidos</span>
+            <strong id="export-cuts">–</strong>
+          </div>
+          <div class="export-summary-item">
+            <span>Tempo poupado</span>
+            <strong id="export-saved" class="success">–</strong>
+          </div>
+        </div>
+
+        <div class="export-options">
+          <div class="option-group">
+            <label>Formato de Saída</label>
+            <div class="option-pills">
+              <button class="pill active" data-format="mp4">MP4</button>
+              <button class="pill" data-format="webm">WebM</button>
+            </div>
+          </div>
+          <div class="option-group">
+            <label>Qualidade</label>
+            <div class="option-pills">
+              <button class="pill" data-quality="high">Alta</button>
+              <button class="pill active" data-quality="medium">Média</button>
+              <button class="pill" data-quality="low">Baixa</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="export-progress-wrap" id="export-progress-wrap" style="display:none">
+          <div class="export-progress-label">
+            <span id="export-progress-text">Processando com FFmpeg...</span>
+            <span id="export-progress-pct">0%</span>
+          </div>
+          <div class="export-progress-bar-bg">
+            <div class="export-progress-bar-fill" id="export-progress-fill"></div>
+          </div>
+          <p class="export-note">O processamento ocorre no seu navegador. Para vídeos grandes isso pode levar alguns minutos.</p>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-cancel" id="btn-cancel-export">Cancelar</button>
+        <button class="btn-start-export" id="btn-start-export">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Iniciar Exportação
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOAST NOTIFICATIONS -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- FFmpeg.wasm via CDN -->
+  <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
