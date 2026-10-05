@@ -4,9 +4,10 @@
  * silence detection, timeline rendering, and video export.
  */
 
-// ─── FFmpeg.wasm (via CDN, no bundler needed) ─────────────────────────────
-// Exposed as window.FFmpeg by the CDN script
-const { createFFmpeg, fetchFile } = FFmpeg;
+// ─── FFmpeg.wasm Helpers ──────────────────────────────────────────────────
+// Safely check window.FFmpeg without throwing if CDN script is pending
+const getCreateFFmpeg = () => (typeof window !== 'undefined' && window.FFmpeg) ? window.FFmpeg.createFFmpeg : null;
+const getFetchFile    = () => (typeof window !== 'undefined' && window.FFmpeg) ? window.FFmpeg.fetchFile : null;
 
 // ─── App State ─────────────────────────────────────────────────────────────
 const state = {
@@ -194,38 +195,60 @@ function hideOverlay() {
   els.previewOverlay.style.display = 'none';
 }
 
-// ─── 1. FFmpeg Initialization ──────────────────────────────────────────────
+// ─── 1. FFmpeg & Splash Screen Handling ────────────────────────────────────
+function dismissSplashScreen() {
+  if (els.ffmpegLoading && !els.ffmpegLoading.classList.contains('fade-out')) {
+    if (els.loadingBar) els.loadingBar.style.width = '100%';
+    if (els.loadingText) els.loadingText.textContent = 'Pronto!';
+    els.ffmpegLoading.classList.add('fade-out');
+    setTimeout(() => {
+      if (els.ffmpegLoading && els.ffmpegLoading.parentNode) {
+        els.ffmpegLoading.remove();
+      }
+    }, 600);
+  }
+}
+
 async function initFFmpeg() {
+  const hasSAB = typeof window !== 'undefined' && (window.crossOriginIsolated || window.SharedArrayBuffer);
+  const createFFmpeg = getCreateFFmpeg();
+
+  // If SharedArrayBuffer or FFmpeg CDN isn't ready on first load, don't stall
+  if (!createFFmpeg || !hasSAB) {
+    console.log('[JuCut] Modo Script / Local Ativo (WebAssembly desativado no primeiro load)');
+    setStatus('Pronto (Modo Script/Local)', 'idle');
+    dismissSplashScreen();
+    return;
+  }
+
   try {
     const ffmpeg = createFFmpeg({
       log: false,
-      corePath: 'https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js',
+      corePath: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js',
       progress: ({ ratio }) => {
         const pct = Math.round(ratio * 100);
-        els.loadingBar.style.width = pct + '%';
+        if (els.loadingBar) els.loadingBar.style.width = pct + '%';
       },
     });
 
-    els.loadingText.textContent = 'Baixando FFmpeg Core...';
-    els.loadingBar.style.width = '10%';
+    if (els.loadingText) els.loadingText.textContent = 'Inicializando FFmpeg...';
 
-    await ffmpeg.load();
+    // Timeout of 5 seconds so it NEVER leaves the page hanging
+    const loadPromise = ffmpeg.load();
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Tempo limite excedido')), 5000)
+    );
+
+    await Promise.race([loadPromise, timeoutPromise]);
     state.ffmpeg = ffmpeg;
     state.ffmpegReady = true;
 
-    els.loadingBar.style.width = '100%';
-    els.loadingText.textContent = 'Pronto!';
-    await sleep(600);
-
-    els.ffmpegLoading.classList.add('fade-out');
-    setTimeout(() => els.ffmpegLoading.remove(), 700);
-
     setStatus('FFmpeg pronto', 'success');
-    showToast('JuCut pronto! Carregue um vídeo para começar.', 'success');
   } catch (err) {
-    console.error('FFmpeg load error:', err);
-    els.loadingText.textContent = 'Erro ao carregar FFmpeg. Verifique sua conexão.';
-    setStatus('Erro FFmpeg', 'error');
+    console.warn('[JuCut] FFmpeg WebAssembly em background indisponível:', err.message);
+    setStatus('Pronto (Modo Script/Local)', 'idle');
+  } finally {
+    dismissSplashScreen();
   }
 }
 
@@ -1214,7 +1237,104 @@ async function exportWithLocalServer() {
   }
 }
 
-// ─── 12. Slider Live Updates ───────────────────────────────────────────────
+function updateExportProgress(pct) {
+  const p = Math.max(0, Math.min(100, Math.round(pct)));
+  if (els.exportProgressFill) els.exportProgressFill.style.width = p + '%';
+  if (els.exportProgressPct) els.exportProgressPct.textContent = p + '%';
+}
+
+// ─── 12b. WebAssembly Browser Export (Fallback) ───────────────────────────
+async function exportWithWasm() {
+  if (!state.videoFile || !state.activeSegments.length) {
+    showToast('Nenhum corte selecionado.', 'warning');
+    return;
+  }
+
+  if (!state.ffmpegReady || !state.ffmpeg) {
+    showToast('FFmpeg WebAssembly não disponível no navegador. Baixe o Script .BAT para exportação instantânea!', 'warning');
+    selectExportMethod('script');
+    return;
+  }
+
+  els.btnStartExport.disabled = true;
+  els.exportProgressWrap.style.display = 'flex';
+  updateExportProgress(5);
+  els.exportProgressText.textContent = 'Carregando vídeo na memória do navegador...';
+  setStatus('Processando via WebAssembly...', 'working');
+
+  try {
+    const fetchFile = getFetchFile();
+    const ffmpeg = state.ffmpeg;
+    const ext = state.videoFile.name.split('.').pop() || 'mp4';
+    const inName = `input.${ext}`;
+    const outName = `output.${ext}`;
+
+    ffmpeg.FS('writeFile', inName, await fetchFile(state.videoFile));
+
+    updateExportProgress(20);
+    els.exportProgressText.textContent = 'Renderizando cortes de silêncio...';
+
+    const filterParts = [];
+    const concatParts = [];
+    state.activeSegments.forEach((seg, i) => {
+      filterParts.push(`[0:v]trim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},setpts=PTS-STARTPTS[v${i}]`);
+      filterParts.push(`[0:a]atrim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},asetpts=PTS-STARTPTS[a${i}]`);
+      concatParts.push(`[v${i}][a${i}]`);
+    });
+    const filterComplex = `${filterParts.join(';')};${concatParts.join('')}concat=n=${state.activeSegments.length}:v=1:a=1[outv][outa]`;
+
+    ffmpeg.setProgress(({ ratio }) => {
+      const pct = Math.min(99, Math.round(20 + ratio * 75));
+      updateExportProgress(pct);
+      els.exportProgressText.textContent = `Renderizando vídeo: ${pct}%`;
+    });
+
+    await ffmpeg.run(
+      '-i', inName,
+      '-filter_complex', filterComplex,
+      '-map', '[outv]',
+      '-map', '[outa]',
+      '-c:v', 'libx264',
+      '-preset', 'ultrafast',
+      '-crf', '26',
+      '-c:a', 'aac',
+      outName
+    );
+
+    const data = ffmpeg.FS('readFile', outName);
+    const blob = new Blob([data.buffer], { type: `video/${ext}` });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${state.videoFile.name.replace(/\.[^.]+$/, '')}_cortado.${ext}`;
+    a.click();
+
+    updateExportProgress(100);
+    els.exportProgressText.textContent = '✅ Concluído!';
+    setStatus('Exportação concluída!', 'success');
+    showToast('Vídeo exportado com sucesso no navegador!', 'success');
+    els.btnCancelExport.textContent = 'Fechar';
+  } catch (err) {
+    console.error('WASM export error:', err);
+    els.exportProgressText.textContent = 'Falha no WebAssembly. Baixe o Script .BAT para corte em 3 segundos!';
+    showToast('Falha no WebAssembly. Recomendamos baixar o Script .BAT de 3 segundos!', 'warning');
+  } finally {
+    els.btnStartExport.disabled = false;
+  }
+}
+
+// ─── 12c. Main Export Router ──────────────────────────────────────────────
+function startExport() {
+  if (state.exportMethod === 'local') {
+    exportWithLocalServer();
+  } else if (state.exportMethod === 'wasm') {
+    exportWithWasm();
+  } else {
+    downloadBatchScript();
+  }
+}
+
+// ─── 13. Slider Live Updates ───────────────────────────────────────────────
 function setupSliders() {
   els.sliderThreshold.addEventListener('input', () => {
     els.valThreshold.textContent = els.sliderThreshold.value + ' dB';
@@ -1383,7 +1503,12 @@ async function init() {
     if (e.target === els.exportModal) closeExportModal();
   });
 
-  await initFFmpeg();
+  // Always dismiss splash screen within 500ms so editor opens instantly on GitHub Pages
+  setTimeout(dismissSplashScreen, 500);
+
+  // Initialize background tasks without blocking UI
+  initFFmpeg();
+  checkLocalEngine();
 }
 
 init();

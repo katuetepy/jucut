@@ -12,7 +12,7 @@ import shutil
 import tempfile
 import subprocess
 from pathlib import Path
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+from http.server import ThreadingHTTPServer, HTTPServer, SimpleHTTPRequestHandler
 import urllib.parse
 
 # Garantir UTF-8 no console Windows
@@ -358,7 +358,7 @@ def main():
     print("  Pressione Ctrl+C para encerrar.")
     print("-" * 60)
 
-    server = HTTPServer(("127.0.0.1", PORT), JuCutHandler)
+    server = ThreadingHTTPServer(("127.0.0.1", PORT), JuCutHandler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

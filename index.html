@@ -6,16 +6,7 @@
   <title>JuCut — Editor de Silêncio Online</title>
   <meta name="description" content="Editor de vídeo online inteligente que detecta e remove silêncios automaticamente. Faça upload do seu vídeo e exporte sem silêncios." />
   <!-- COI Service Worker: enables SharedArrayBuffer on GitHub Pages for FFmpeg.wasm -->
-  <script>
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('./coi-serviceworker.js').then(reg => {
-        if (reg.installing || reg.waiting) {
-          // Reload once the SW activates to apply COOP/COEP headers
-          navigator.serviceWorker.addEventListener('controllerchange', () => location.reload());
-        }
-      }).catch(console.error);
-    }
-  </script>
+  <script src="coi-serviceworker.js"></script>
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -32,7 +23,7 @@
       <div class="loading-bar-container">
         <div class="loading-bar" id="loading-bar"></div>
       </div>
-      <p class="loading-text" id="loading-text">Inicializando FFmpeg...</p>
+      <p class="loading-text" id="loading-text">Carregando JuCut...</p>
     </div>
   </div>
 
@@ -449,7 +440,7 @@
   <div class="toast-container" id="toast-container"></div>
 
   <!-- FFmpeg.wasm via CDN -->
-  <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
